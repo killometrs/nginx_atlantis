@@ -106,12 +106,22 @@ jobs:
         fi
 
     - name: Create registry secret for Kubernetes
-      uses: yc-actions/yc-k8s-cr-pull-secret@v2
-      with:
-        yc-sa-json-credentials: ${{ secrets.YC_SA_JSON_KEY }}
-        yc-registry: cr.yandex
-        secret-name: yc-registry-secret
-        k8s-namespace: diplom-nginx-namespace
+      run: |
+        # Создаем временный файл с JSON ключом
+        echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
+        
+        # Извлекаем private key и преобразуем \n в настоящие переносы строк
+        PRIVATE_KEY=$(jq -r '.private_key' key.json | sed 's/\\n/\n/g')
+        
+        # Создаем docker-registry secret напрямую через kubectl
+        kubectl create secret docker-registry yc-registry-secret \
+          --docker-server=cr.yandex \
+          --docker-username=json_key \
+          --docker-password="$PRIVATE_KEY" \
+          --namespace=diplom-nginx-namespace \
+          --dry-run=client -o yaml | kubectl apply -f -
+        
+        echo "Registry secret created successfully"
 
     - name: Create nginx config for path routing
       run: |
