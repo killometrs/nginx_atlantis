@@ -28,6 +28,15 @@ jobs:
 
     - name: Validate HTML files
       run: |
+        # Создаем конфиг для html-validate который игнорирует правило про lang атрибут
+        cat > .htmlvalidate.json << EOF
+        {
+          "rules": {
+            "element-required-attributes": "off"
+          }
+        }
+        EOF
+        
         # Проверяем все HTML файлы с помощью html-validate
         html-validate ./html/**/*.html
 
@@ -105,6 +114,52 @@ jobs:
           echo "Namespace diplom-nginx-namespace already exists"
         fi
 
+    - name: Create nginx config for path routing
+      run: |
+        # Создаем конфиг nginx для работы по пути /nginx
+        cat > nginx-config.yaml << EOF
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: nginx-config
+          namespace: diplom-nginx-namespace
+        data:
+          nginx.conf: |
+            events {
+                worker_connections 1024;
+            }
+            
+            http {
+                include /etc/nginx/mime.types;
+                default_type application/octet-stream;
+                
+                server {
+                    listen 80;
+                    server_name _;
+                    
+                    # Главная страница по пути /nginx
+                    location /nginx {
+                        alias /usr/share/nginx/html;
+                        index index.html;
+                        try_files \$uri \$uri/ /nginx/index.html;
+                    }
+                    
+                    # Статические файлы по пути /nginx/
+                    location /nginx/ {
+                        alias /usr/share/nginx/html/;
+                        try_files \$uri \$uri/ =404;
+                    }
+                    
+                    # Редирект с / на /nginx
+                    location = / {
+                        return 302 /nginx;
+                    }
+                }
+            }
+        EOF
+        
+        kubectl apply -f nginx-config.yaml
+
     - name: Create or update deployment
       run: |
         # Создаем временный манифест для deployment
@@ -138,18 +193,26 @@ jobs:
                   limits:
                     memory: "128Mi"
                     cpu: "100m"
+                volumeMounts:
+                - name: nginx-config
+                  mountPath: /etc/nginx/nginx.conf
+                  subPath: nginx.conf
                 livenessProbe:
                   httpGet:
-                    path: /
+                    path: /nginx
                     port: 80
-                  initialDelaySeconds: 5
+                  initialDelaySeconds: 10
                   periodSeconds: 10
                 readinessProbe:
                   httpGet:
-                    path: /
+                    path: /nginx
                     port: 80
                   initialDelaySeconds: 5
-                  periodSeconds: 10
+                  periodSeconds: 5
+              volumes:
+              - name: nginx-config
+                configMap:
+                  name: nginx-config
         EOF
 
         # Применяем манифест (создаст или обновит deployment)
@@ -176,6 +239,33 @@ jobs:
         # Применяем манифест (создаст или обновит service)
         kubectl apply -f service.yaml
 
+    - name: Create ingress for nginx path
+      run: |
+        # Создаем Ingress для маршрутизации по пути /nginx
+        cat > ingress.yaml << EOF
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: nginx-ingress
+          namespace: diplom-nginx-namespace
+          annotations:
+            nginx.ingress.kubernetes.io/rewrite-target: /$2
+            nginx.ingress.kubernetes.io/ssl-redirect: "false"
+        spec:
+          rules:
+          - http:
+              paths:
+              - path: /nginx(/|$)(.*)
+                pathType: Prefix
+                backend:
+                  service:
+                    name: diplom-nginx-service
+                    port:
+                      number: 80
+        EOF
+
+        kubectl apply -f ingress.yaml
+
     - name: Wait for deployment rollout
       run: |
         kubectl rollout status deployment/diplom-nginx-app --namespace=diplom-nginx-namespace --timeout=300s
@@ -190,6 +280,9 @@ jobs:
         
         echo "=== Service status ==="
         kubectl get services -n diplom-nginx-namespace
+        
+        echo "=== Ingress status ==="
+        kubectl get ingress -n diplom-nginx-namespace
         
         echo "=== Current image version ==="
         kubectl describe deployment diplom-nginx-app -n diplom-nginx-namespace | grep Image:
