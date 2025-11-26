@@ -1,4 +1,4 @@
-name: Build and Deploy to Yandex Cloud
+name: Build and Deploy to Kubernetes
 
 on:
   push:
@@ -21,10 +21,15 @@ jobs:
     - name: Test Docker build
       run: docker build -t test-diplom-nginx-image .
 
-    - name: Validate HTML
-      uses: ankitcode/static-html-validate@v1
-      with:
-        path: './html'
+    - name: Validate HTML files
+      run: |
+        find ./html -name "*.html" -type f | while read file; do
+          echo "Validating $file"
+          if ! docker run --rm -v "$(pwd):/workspace" ghcr.io/validator/validator:latest "/workspace/$file" | grep -q "The document validates"; then
+            echo "HTML validation failed for $file"
+            exit 1
+          fi
+        done
 
   build-and-push:
     needs: test
@@ -72,15 +77,119 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Setup kubectl
-      uses: yc-actions/yc-k8s-setup@v2
+      uses: azure/setup-kubectl@v3
       with:
-        yc-sa-json-credentials: ${{ secrets.YC_SA_JSON_KEY }}
+        version: 'v1.28.0'
+
+    - name: Configure kubeconfig
+      run: |
+        mkdir -p ~/.kube
+        echo "${{ secrets.KUBECONFIG }}" > ~/.kube/config
+        chmod 600 ~/.kube/config
+
+    - name: Verify cluster access
+      run: |
+        kubectl cluster-info
+        kubectl get nodes
 
     - name: Extract tag name
       id: tag
       run: echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
-    - name: Deploy to Kubernetes
+    - name: Create namespace if not exists
       run: |
-        # Update image in deployment using the tag
-        kubectl set image deployment/diplom-nginx-app diplom-nginx-app=${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.TAG }} --namespace=diplom-nginx-namespace
+        if ! kubectl get namespace diplom-nginx-namespace; then
+          echo "Creating namespace diplom-nginx-namespace"
+          kubectl create namespace diplom-nginx-namespace
+        else
+          echo "Namespace diplom-nginx-namespace already exists"
+        fi
+
+    - name: Create or update deployment
+      run: |
+        # Создаем временный манифест для deployment
+        cat > deployment.yaml << EOF
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: diplom-nginx-app
+          namespace: diplom-nginx-namespace
+          labels:
+            app: diplom-nginx-app
+        spec:
+          replicas: 2
+          selector:
+            matchLabels:
+              app: diplom-nginx-app
+          template:
+            metadata:
+              labels:
+                app: diplom-nginx-app
+            spec:
+              containers:
+              - name: diplom-nginx-app
+                image: ${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.TAG }}
+                ports:
+                - containerPort: 80
+                resources:
+                  requests:
+                    memory: "64Mi"
+                    cpu: "50m"
+                  limits:
+                    memory: "128Mi"
+                    cpu: "100m"
+                livenessProbe:
+                  httpGet:
+                    path: /
+                    port: 80
+                  initialDelaySeconds: 5
+                  periodSeconds: 10
+                readinessProbe:
+                  httpGet:
+                    path: /
+                    port: 80
+                  initialDelaySeconds: 5
+                  periodSeconds: 10
+        EOF
+
+        # Применяем манифест (создаст или обновит deployment)
+        kubectl apply -f deployment.yaml
+
+    - name: Create or update service
+      run: |
+        # Создаем временный манифест для service
+        cat > service.yaml << EOF
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: diplom-nginx-service
+          namespace: diplom-nginx-namespace
+        spec:
+          selector:
+            app: diplom-nginx-app
+          ports:
+          - port: 80
+            targetPort: 80
+          type: ClusterIP
+        EOF
+
+        # Применяем манифест (создаст или обновит service)
+        kubectl apply -f service.yaml
+
+    - name: Wait for deployment rollout
+      run: |
+        kubectl rollout status deployment/diplom-nginx-app --namespace=diplom-nginx-namespace --timeout=300s
+
+    - name: Verify deployment
+      run: |
+        echo "=== Deployment status ==="
+        kubectl get deployments -n diplom-nginx-namespace
+        
+        echo "=== Pods status ==="
+        kubectl get pods -n diplom-nginx-namespace
+        
+        echo "=== Service status ==="
+        kubectl get services -n diplom-nginx-namespace
+        
+        echo "=== Current image version ==="
+        kubectl describe deployment diplom-nginx-app -n diplom-nginx-namespace | grep Image:
