@@ -48,19 +48,69 @@ jobs:
     - name: Setup Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Install jq
-      run: sudo apt-get update && sudo apt-get install -y jq curl
+    - name: Install dependencies
+      run: sudo apt-get update && sudo apt-get install -y jq openssl
 
-    - name: Login to Yandex Container Registry using IAM token
+    - name: Login to Yandex Container Registry with JWT
       run: |
-        # Получаем IAM токен используя JSON ключ
-        IAM_TOKEN=$(curl -s -H "Content-Type: application/json" \
-          -d @<(echo '${{ secrets.YC_SA_JSON_KEY }}') \
-          "https://iam.api.cloud.yandex.net/iam/v1/tokens" | \
-          jq -r '.iamToken')
+        # Создаем временный файл с JSON ключом
+        echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
         
-        # Логинимся в registry используя IAM токен
-        echo "$IAM_TOKEN" | docker login --username iam --password-stdin cr.yandex
+        # Извлекаем данные из key.json
+        SERVICE_ACCOUNT_ID=$(jq -r '.service_account_id' key.json)
+        KEY_ID=$(jq -r '.id' key.json)
+        PRIVATE_KEY_PEM=$(jq -r '.private_key' key.json | sed 's/\\n/\n/g')
+        
+        echo "Service Account ID: $SERVICE_ACCOUNT_ID"
+        echo "Key ID: $KEY_ID"
+        
+        # Подготовка заголовка JWT
+        HEADER='{"typ":"JWT","alg":"PS256","kid":"'"$KEY_ID"'"}'
+        
+        # Подготовка полезной нагрузки JWT
+        NOW=$(date +%s)
+        EXPIRES=$(($NOW + 3600))
+        AUDIENCE="https://iam.api.cloud.yandex.net/iam/v1/tokens"
+        
+        PAYLOAD='{"aud":"'"$AUDIENCE"'","iss":"'"$SERVICE_ACCOUNT_ID"'","iat":'$NOW',"exp":'$EXPIRES'}'
+        
+        # Base64Url-кодирование
+        base64url_encode() {
+          openssl enc -base64 -A | tr '+/' '-_' | tr -d '='
+        }
+        
+        JWT_HEADER_B64=$(echo -n "$HEADER" | base64url_encode)
+        JWT_PAYLOAD_B64=$(echo -n "$PAYLOAD" | base64url_encode)
+        
+        # Создание подписи с помощью openssl
+        echo "$PRIVATE_KEY_PEM" > private_key_temp.pem
+        
+        SIGNATURE=$(echo -n "$JWT_HEADER_B64.$JWT_PAYLOAD_B64" | openssl dgst -binary -sha256 -sign private_key_temp.pem | base64url_encode)
+        
+        # Удаляем временный файл
+        rm private_key_temp.pem
+        
+        # Сборка финального JWT
+        JWT_TOKEN="$JWT_HEADER_B64.$JWT_PAYLOAD_B64.$SIGNATURE"
+        
+        # Обмен JWT на IAM-токен
+        RESPONSE=$(curl -s -X POST \
+          -H "Content-Type: application/json" \
+          --data '{"jwt":"'"$JWT_TOKEN"'"}' \
+          "https://iam.api.cloud.yandex.net/iam/v1/tokens")
+        
+        # Получаем IAM токен
+        IAM_TOKEN=$(echo "$RESPONSE" | jq -r '.iamToken')
+        
+        if [ "$IAM_TOKEN" != "null" ] && [ -n "$IAM_TOKEN" ]; then
+          echo "IAM token successfully received"
+          # Логинимся в registry используя IAM токен
+          echo "$IAM_TOKEN" | docker login --username iam --password-stdin cr.yandex
+        else
+          echo "Error getting IAM token:"
+          echo "$RESPONSE"
+          exit 1
+        fi
 
     - name: Extract tag name
       id: tag
