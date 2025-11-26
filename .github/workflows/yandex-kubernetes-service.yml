@@ -49,7 +49,10 @@ jobs:
       uses: docker/setup-buildx-action@v3
 
     - name: Install dependencies
-      run: sudo apt-get update && sudo apt-get install -y jq openssl
+      run: sudo apt-get update && sudo apt-get install -y jq openssl python3 python3-pip
+
+    - name: Install python cryptography library for PS256
+      run: pip3 install cryptography
 
     - name: Login to Yandex Container Registry with JWT
       run: |
@@ -64,34 +67,89 @@ jobs:
         echo "Service Account ID: $SERVICE_ACCOUNT_ID"
         echo "Key ID: $KEY_ID"
         
-        # Подготовка заголовка JWT
-        HEADER='{"typ":"JWT","alg":"PS256","kid":"'"$KEY_ID"'"}'
+        # Сохраняем private key в файл
+        echo "$PRIVATE_KEY_PEM" > private_key.pem
         
-        # Подготовка полезной нагрузки JWT
-        NOW=$(date +%s)
-        EXPIRES=$(($NOW + 3600))
-        AUDIENCE="https://iam.api.cloud.yandex.net/iam/v1/tokens"
+        # Используем Python для создания JWT с PS256 подписью
+        python3 << EOF
+import json
+import time
+import base64
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives import serialization
+import jwt
+
+# Читаем ключ
+with open('private_key.pem', 'r') as f:
+    private_key_pem = f.read()
+
+private_key = serialization.load_pem_private_key(
+    private_key_pem.encode(),
+    password=None
+)
+
+# Подготавливаем claims
+now = int(time.time())
+expires = now + 3600
+
+payload = {
+    "aud": "https://iam.api.cloud.yandex.net/iam/v1/tokens",
+    "iss": "$SERVICE_ACCOUNT_ID",
+    "iat": now,
+    "exp": expires
+}
+
+# Создаем JWT с PS256 алгоритмом
+jwt_token = jwt.encode(
+    payload,
+    private_key,
+    algorithm="PS256",
+    headers={"kid": "$KEY_ID", "typ": "JWT", "alg": "PS256"}
+)
+
+print(jwt_token)
+EOF
+
+        JWT_TOKEN=$(python3 << EOF
+import json
+import time
+import base64
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives import serialization
+import jwt
+
+with open('private_key.pem', 'r') as f:
+    private_key_pem = f.read()
+
+private_key = serialization.load_pem_private_key(
+    private_key_pem.encode(),
+    password=None
+)
+
+now = int(time.time())
+expires = now + 3600
+
+payload = {
+    "aud": "https://iam.api.cloud.yandex.net/iam/v1/tokens",
+    "iss": "$SERVICE_ACCOUNT_ID",
+    "iat": now,
+    "exp": expires
+}
+
+jwt_token = jwt.encode(
+    payload,
+    private_key,
+    algorithm="PS256",
+    headers={"kid": "$KEY_ID", "typ": "JWT", "alg": "PS256"}
+)
+
+print(jwt_token)
+EOF
+        )
         
-        PAYLOAD='{"aud":"'"$AUDIENCE"'","iss":"'"$SERVICE_ACCOUNT_ID"'","iat":'$NOW',"exp":'$EXPIRES'}'
-        
-        # Base64Url-кодирование
-        base64url_encode() {
-          openssl enc -base64 -A | tr '+/' '-_' | tr -d '='
-        }
-        
-        JWT_HEADER_B64=$(echo -n "$HEADER" | base64url_encode)
-        JWT_PAYLOAD_B64=$(echo -n "$PAYLOAD" | base64url_encode)
-        
-        # Создание подписи с помощью openssl
-        echo "$PRIVATE_KEY_PEM" > private_key_temp.pem
-        
-        SIGNATURE=$(echo -n "$JWT_HEADER_B64.$JWT_PAYLOAD_B64" | openssl dgst -binary -sha256 -sign private_key_temp.pem | base64url_encode)
-        
-        # Удаляем временный файл
-        rm private_key_temp.pem
-        
-        # Сборка финального JWT
-        JWT_TOKEN="$JWT_HEADER_B64.$JWT_PAYLOAD_B64.$SIGNATURE"
+        echo "JWT Token created successfully"
         
         # Обмен JWT на IAM-токен
         RESPONSE=$(curl -s -X POST \
