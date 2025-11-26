@@ -54,24 +54,9 @@ jobs:
     - name: Install python cryptography library for PS256
       run: pip3 install pyjwt cryptography
 
-    - name: Login to Yandex Container Registry with JWT
+    - name: Create Python script for JWT generation
       run: |
-        # Создаем временный файл с JSON ключом
-        echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
-        
-        # Извлекаем данные из key.json
-        SERVICE_ACCOUNT_ID=$(jq -r '.service_account_id' key.json)
-        KEY_ID=$(jq -r '.id' key.json)
-        PRIVATE_KEY_PEM=$(jq -r '.private_key' key.json | sed 's/\\n/\n/g')
-        
-        echo "Service Account ID: $SERVICE_ACCOUNT_ID"
-        echo "Key ID: $KEY_ID"
-        
-        # Сохраняем private key в файл
-        echo "$PRIVATE_KEY_PEM" > private_key.pem
-        
-        # Используем Python для создания JWT с PS256 подписью
-        python3 -c "
+        cat > generate_jwt.py << 'PYTHON_EOF'
 import json
 import time
 import jwt
@@ -106,7 +91,30 @@ jwt_token = jwt.encode(
 )
 
 print(jwt_token)
-" > jwt_token.txt
+PYTHON_EOF
+
+    - name: Login to Yandex Container Registry with JWT
+      run: |
+        # Создаем временный файл с JSON ключом
+        echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
+        
+        # Извлекаем данные из key.json
+        SERVICE_ACCOUNT_ID=$(jq -r '.service_account_id' key.json)
+        KEY_ID=$(jq -r '.id' key.json)
+        PRIVATE_KEY_PEM=$(jq -r '.private_key' key.json | sed 's/\\n/\n/g')
+        
+        echo "Service Account ID: $SERVICE_ACCOUNT_ID"
+        echo "Key ID: $KEY_ID"
+        
+        # Сохраняем private key в файл
+        echo "$PRIVATE_KEY_PEM" > private_key.pem
+        
+        # Заменяем переменные в Python скрипте
+        sed -i "s/\$SERVICE_ACCOUNT_ID/$SERVICE_ACCOUNT_ID/g" generate_jwt.py
+        sed -i "s/\$KEY_ID/$KEY_ID/g" generate_jwt.py
+        
+        # Используем Python для создания JWT с PS256 подписью
+        python3 generate_jwt.py > jwt_token.txt
 
         JWT_TOKEN=$(cat jwt_token.txt)
         echo "JWT Token created successfully"
