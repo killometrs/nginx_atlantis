@@ -108,13 +108,13 @@ jobs:
 
     - name: Setup registry access via permanent DaemonSet
       run: |
-        # Вычисляем auth data заранее
+        # Вычисляем auth data
         echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
         PRIVATE_KEY=$(jq -r '.private_key' key.json | sed 's/\\n/\\n/g')
         AUTH_DATA=$(echo -n "json_key:$PRIVATE_KEY" | base64 -w0)
         
-        # Создаем DaemonSet используя kubectl apply с прямым YAML
-        cat <<EOF | kubectl apply -f -
+        # Минимальный DaemonSet
+        kubectl apply -f - <<EOF
         apiVersion: apps/v1
         kind: DaemonSet
         metadata:
@@ -129,22 +129,18 @@ jobs:
               labels:
                 name: yc-registry-setup
             spec:
-              hostPID: true
               hostNetwork: true
               containers:
               - name: setup
-                image: alpine
-                command: 
+                image: busybox
+                command:
                 - /bin/sh
                 - -c
                 - |
-                  apk add --no-cache docker
                   mkdir -p /root/.docker
                   echo '{"auths":{"cr.yandex":{"auth":"$AUTH_DATA"}}}' > /root/.docker/config.json
-                  echo "Docker config for Yandex Registry configured on \$(hostname)"
-                  sleep infinity
-                securityContext:
-                  privileged: true
+                  echo "Docker config configured"
+                  sleep 36000
                 volumeMounts:
                 - name: docker-dir
                   mountPath: /root/.docker
@@ -152,9 +148,6 @@ jobs:
               - name: docker-dir
                 hostPath:
                   path: /root/.docker
-                  type: DirectoryOrCreate
-          tolerations:
-          - operator: Exists
         EOF
 
         echo "Waiting for registry setup pods to start..."
