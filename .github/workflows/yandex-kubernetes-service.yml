@@ -106,64 +106,67 @@ jobs:
           echo "Namespace diplom-nginx-namespace already exists"
         fi
 
-    - name: Create registry secret with IAM token
+    - name: Create registry secret using container
       run: |
-        # Устанавливаем зависимости
-        sudo apt-get update && sudo apt-get install -y jq
+        # Используем готовый контейнер для получения IAM токена
+        docker run --rm \
+          -v $(pwd):/workspace \
+          -w /workspace \
+          python:3.9-alpine sh -c "
+          pip install pyjwt cryptography &&
+          cat > get_token.py << 'EOF'
+import json, time, jwt, requests
+from cryptography.hazmat.primitives import serialization
+
+key_data = json.loads('${{ secrets.YC_SA_JSON_KEY }}')
+private_key = serialization.load_pem_private_key(
+    key_data['private_key'].replace('\\\\n', '\\n').encode(),
+    password=None
+)
+
+payload = {
+    'aud': 'https://iam.api.cloud.yandex.net/iam/v1/tokens',
+    'iss': key_data['service_account_id'],
+    'iat': int(time.time()),
+    'exp': int(time.time()) + 3600
+}
+
+jwt_token = jwt.encode(
+    payload,
+    private_key,
+    algorithm='PS256',
+    headers={'kid': key_data['id'], 'typ': 'JWT', 'alg': 'PS256'}
+)
+
+response = requests.post(
+    'https://iam.api.cloud.yandex.net/iam/v1/tokens',
+    json={'jwt': jwt_token}
+)
+
+if response.status_code == 200:
+    print(response.json()['iamToken'])
+else:
+    print('ERROR:' + response.text)
+    exit(1)
+EOF
+          python get_token.py
+        " > iam_token.txt
         
-        # Создаем временный файл с JSON ключом
-        echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
+        IAM_TOKEN=$(cat iam_token.txt)
         
-        # Получаем IAM токен через API
-        IAM_TOKEN=$(curl -s -X POST \
-          -H "Content-Type: application/json" \
-          -d @key.json \
-          "https://iam.api.cloud.yandex.net/iam/v1/tokens" | \
-          jq -r '.iamToken')
-        
-        if [ -z "$IAM_TOKEN" ] || [ "$IAM_TOKEN" = "null" ]; then
-          echo "Error: Failed to get IAM token via simple API call"
-          echo "Trying alternative approach with JWT..."
-          
-          # Альтернативный подход - создаем JWT вручную
-          SERVICE_ACCOUNT_ID=$(jq -r '.service_account_id' key.json)
-          PRIVATE_KEY=$(jq -r '.private_key' key.json | sed 's/\\n/\n/g')
-          
-          # Простой JWT создание (может потребовать доработки)
-          HEADER='{"alg":"RS256","typ":"JWT"}'
-          NOW=$(date +%s)
-          EXPIRES=$(($NOW + 3600))
-          PAYLOAD='{"aud":"https://iam.api.cloud.yandex.net/iam/v1/tokens","iss":"'$SERVICE_ACCOUNT_ID'","iat":'$NOW',"exp":'$EXPIRES'}'
-          
-          JWT_HEADER_B64=$(echo -n "$HEADER" | base64 -w0)
-          JWT_PAYLOAD_B64=$(echo -n "$PAYLOAD" | base64 -w0)
-          
-          echo "$PRIVATE_KEY" > private_key.pem
-          SIGNATURE=$(echo -n "${JWT_HEADER_B64}.${JWT_PAYLOAD_B64}" | openssl dgst -binary -sha256 -sign private_key.pem | base64 -w0)
-          
-          JWT_TOKEN="${JWT_HEADER_B64}.${JWT_PAYLOAD_B64}.${SIGNATURE}"
-          
-          IAM_TOKEN=$(curl -s -X POST \
-            -H "Content-Type: application/json" \
-            -d "{\"jwt\": \"$JWT_TOKEN\"}" \
-            "https://iam.api.cloud.yandex.net/iam/v1/tokens" | \
-            jq -r '.iamToken')
-        fi
-        
-        if [ -n "$IAM_TOKEN" ] && [ "$IAM_TOKEN" != "null" ]; then
-          echo "IAM token received successfully"
-          # Создаем secret с IAM токеном
-          kubectl create secret docker-registry yc-registry-pull-secret \
-            --docker-server=cr.yandex \
-            --docker-username=iam \
-            --docker-password="$IAM_TOKEN" \
-            --namespace=diplom-nginx-namespace \
-            --dry-run=client -o yaml | kubectl apply -f -
-          echo "Registry secret created with IAM token"
-        else
-          echo "Error: Could not get IAM token. Please check service account permissions."
+        if [[ "$IAM_TOKEN" == ERROR:* ]]; then
+          echo "Failed to get IAM token: $IAM_TOKEN"
           exit 1
         fi
+        
+        kubectl create secret docker-registry yc-registry-pull-secret \
+          --docker-server=cr.yandex \
+          --docker-username=iam \
+          --docker-password="$IAM_TOKEN" \
+          --namespace=diplom-nginx-namespace \
+          --dry-run=client -o yaml | kubectl apply -f -
+        
+        echo "Registry secret created successfully"
 
     - name: Create nginx config for path routing
       run: |
