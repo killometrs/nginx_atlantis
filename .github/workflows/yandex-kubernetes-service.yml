@@ -107,16 +107,34 @@ jobs:
 
     - name: Create registry secret for Kubernetes
       run: |
-        # Создаем Docker config json для доступа к registry
-        echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
-        PRIVATE_KEY=$(jq -r '.private_key' key.json)
-        AUTH=$(echo -n "json_key:$PRIVATE_KEY" | base64 -w0)
+        # Устанавливаем зависимости
+        sudo apt-get update && sudo apt-get install -y jq
         
+        # Создаем временный файл с JSON ключом
+        echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
+        
+        # Получаем IAM токен через API
+        IAM_TOKEN=$(curl -s -X POST \
+          -H "Content-Type: application/json" \
+          -d @key.json \
+          "https://iam.api.cloud.yandex.net/iam/v1/tokens" | \
+          jq -r '.iamToken')
+        
+        if [ -z "$IAM_TOKEN" ] || [ "$IAM_TOKEN" = "null" ]; then
+          echo "Error: Failed to get IAM token"
+          exit 1
+        fi
+        
+        echo "IAM token received successfully"
+        
+        # Создаем Docker config json
         cat > docker-config.json << EOF
         {
           "auths": {
             "cr.yandex": {
-              "auth": "$AUTH"
+              "username": "iam",
+              "password": "$IAM_TOKEN",
+              "auth": "$(echo -n "iam:$IAM_TOKEN" | base64 -w0)"
             }
           }
         }
@@ -128,6 +146,8 @@ jobs:
           --type=kubernetes.io/dockerconfigjson \
           --namespace=diplom-nginx-namespace \
           --dry-run=client -o yaml | kubectl apply -f -
+        
+        echo "Registry secret created successfully"
 
     - name: Create nginx config for path routing
       run: |
