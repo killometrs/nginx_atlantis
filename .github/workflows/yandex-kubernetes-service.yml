@@ -48,17 +48,25 @@ jobs:
     - name: Setup Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Process private key and login
+    - name: Login to Yandex Container Registry using OAuth token
       run: |
-        # Преобразуем \n в настоящие переносы строк
-        echo '${{ secrets.YC_PRIVATE_KEY }}' | sed 's/\\n/\n/g' > private_key.pem
+        # Создаем временный файл с JSON ключом
+        echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
         
-        # Проверяем что файл создан правильно
-        echo "=== Private key file content (first 5 lines) ==="
-        head -5 private_key.pem
+        # Устанавливаем YC CLI
+        curl -s https://storage.yandex-cloud.net/yandexcloud-yc/install.sh | bash > /dev/null 2>&1
+        source ~/.bashrc
         
-        # Логинимся используя private key файл
-        cat private_key.pem | docker login --username json_key --password-stdin cr.yandex
+        # Настраиваем профиль
+        yc config set service-account-key key.json
+        yc config set cloud-id ${{ secrets.YC_CLOUD_ID }}
+        yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
+        
+        # Настраиваем Docker аутентификацию
+        yc container registry configure-docker --force
+        
+        # Проверяем что логин прошел
+        docker login cr.yandex
 
     - name: Extract tag name
       id: tag
