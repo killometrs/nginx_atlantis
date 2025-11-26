@@ -106,53 +106,33 @@ jobs:
           echo "Namespace diplom-nginx-namespace already exists"
         fi
 
-    - name: Setup registry access via permanent DaemonSet
+    - name: Clean up any existing DaemonSet
       run: |
-        # Вычисляем auth data
-        echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
-        PRIVATE_KEY=$(jq -r '.private_key' key.json | sed 's/\\n/\\n/g')
-        AUTH_DATA=$(echo -n "json_key:$PRIVATE_KEY" | base64 -w0)
-        
-        # Минимальный DaemonSet
-        kubectl apply -f - <<EOF
-        apiVersion: apps/v1
-        kind: DaemonSet
-        metadata:
-          name: yc-registry-setup
-          namespace: kube-system
-        spec:
-          selector:
-            matchLabels:
-              name: yc-registry-setup
-          template:
-            metadata:
-              labels:
-                name: yc-registry-setup
-            spec:
-              hostNetwork: true
-              containers:
-              - name: setup
-                image: busybox
-                command:
-                - /bin/sh
-                - -c
-                - |
-                  mkdir -p /root/.docker
-                  echo '{"auths":{"cr.yandex":{"auth":"$AUTH_DATA"}}}' > /root/.docker/config.json
-                  echo "Docker config configured"
-                  sleep 36000
-                volumeMounts:
-                - name: docker-dir
-                  mountPath: /root/.docker
-              volumes:
-              - name: docker-dir
-                hostPath:
-                  path: /root/.docker
-        EOF
+        kubectl delete daemonset yc-registry-setup -n kube-system --ignore-not-found=true
+        echo "Cleaned up any existing DaemonSet"
 
-        echo "Waiting for registry setup pods to start..."
-        sleep 30
-        kubectl get pods -n kube-system -l name=yc-registry-setup
+    - name: Create registry secret and bind to service account
+      run: |
+        # Создаем временный файл с JSON ключом
+        echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
+        
+        # Извлекаем private key
+        PRIVATE_KEY=$(jq -r '.private_key' key.json | sed 's/\\n/\n/g')
+        
+        # Создаем secret для доступа к registry
+        kubectl create secret docker-registry yc-registry-pull-secret \
+          --docker-server=cr.yandex \
+          --docker-username=json_key \
+          --docker-password="$PRIVATE_KEY" \
+          --namespace=diplom-nginx-namespace \
+          --dry-run=client -o yaml | kubectl apply -f -
+        
+        # Привязываем secret к default service account в namespace
+        kubectl patch serviceaccount default \
+          -n diplom-nginx-namespace \
+          -p '{"imagePullSecrets": [{"name": "yc-registry-pull-secret"}]}'
+        
+        echo "Registry secret created and bound to default service account"
 
     - name: Create nginx config for path routing
       run: |
@@ -247,6 +227,8 @@ jobs:
               - name: nginx-config
                 configMap:
                   name: nginx-config
+              imagePullSecrets:
+              - name: yc-registry-pull-secret
         EOF
         kubectl apply -f deployment.yaml
 
@@ -307,7 +289,9 @@ jobs:
         kubectl get services -n diplom-nginx-namespace
         echo "=== Ingress status ==="
         kubectl get ingress -n diplom-nginx-namespace
-        echo "=== DaemonSet status ==="
-        kubectl get daemonset yc-registry-setup -n kube-system
+        echo "=== Registry secret ==="
+        kubectl get secret yc-registry-pull-secret -n diplom-nginx-namespace
+        echo "=== Service account ==="
+        kubectl get serviceaccount default -n diplom-nginx-namespace -o yaml | grep -A5 imagePullSecrets
         echo "=== Current image version ==="
         kubectl describe deployment diplom-nginx-app -n diplom-nginx-namespace | grep Image:
