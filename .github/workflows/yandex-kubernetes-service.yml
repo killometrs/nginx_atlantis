@@ -68,66 +68,14 @@ jobs:
         cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:latest
         cache-to: type=inline
 
-  setup-yc-service-account:
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Setup YC CLI
-      run: |
-        curl -s https://storage.yandex-cloud.net/yandexcloud-yc/install.sh | bash
-        source ~/.bashrc
-
-    - name: Configure YC CLI
-      run: |
-        echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
-        yc config set service-account-key key.json
-        yc config set cloud-id ${{ secrets.YC_CLOUD_ID }}
-        yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
-
-    - name: Create YC Service Account for Kubernetes
-      run: |
-        # Создаем сервисный аккаунт в Yandex Cloud если не существует
-        if ! yc iam service-account get --name github-actions-deploy-nginx 2>/dev/null; then
-          echo "Creating YC service account: github-actions-deploy-nginx"
-          yc iam service-account create --name github-actions-deploy-nginx
-        else
-          echo "YC service account github-actions-deploy-nginx already exists"
-        fi
-
-        # Даем права на pull из Container Registry
-        yc container registry add-access-binding \
-          ${{ secrets.YC_REGISTRY_ID }} \
-          --service-account-name github-actions-deploy-nginx \
-          --role container-registry.images.puller
-
-        # Создаем ключ для сервисного аккаунта
-        yc iam key create \
-          --service-account-name github-actions-deploy-nginx \
-          --output k8s-sa-key.json
-
-        echo "YC service account created and configured"
-
-    - name: Upload service account key
-      uses: actions/upload-artifact@v4
-      with:
-        name: k8s-sa-key
-        path: k8s-sa-key.json
-
   deploy:
-    needs: [build-and-push, setup-yc-service-account]
+    needs: build-and-push
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-
-    - name: Download service account key
-      uses: actions/download-artifact@v4
-      with:
-        name: k8s-sa-key
 
     - name: Setup kubectl
       uses: azure/setup-kubectl@v3
@@ -158,13 +106,16 @@ jobs:
           echo "Namespace diplom-nginx-namespace already exists"
         fi
 
-    - name: Create registry pull secret for YC service account
+    - name: Create registry pull secret using existing service account
       run: |
-        # Создаем secret для доступа к registry с ключом сервисного аккаунта
+        # Используем существующий сервисный аккаунт из secrets
+        echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
+        
+        # Создаем secret для доступа к registry
         kubectl create secret docker-registry yc-registry-pull-secret \
           --docker-server=cr.yandex \
           --docker-username=json_key \
-          --docker-password="$(jq -r '.private_key' k8s-sa-key.json | sed 's/\\n/\n/g')" \
+          --docker-password="$(jq -r '.private_key' key.json | sed 's/\\n/\n/g')" \
           --namespace=diplom-nginx-namespace \
           --dry-run=client -o yaml | kubectl apply -f -
 
