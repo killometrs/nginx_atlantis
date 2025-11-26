@@ -106,8 +106,12 @@ jobs:
           echo "Namespace diplom-nginx-namespace already exists"
         fi
 
-    # УДАЛИТЕ старый шаг и используйте только этот:
-    - name: Create registry pull secret with IAM token
+   - name: Setup YC CLI
+      uses: yc-actions/yc-setup@v2
+      with:
+        yc-sa-json-credentials: ${{ secrets.YC_SA_JSON_KEY }}
+
+   - name: Create registry pull secret with IAM token
       run: |
         # Устанавливаем YC CLI
         curl -s https://storage.yandex-cloud.net/yandexcloud-yc/install.sh | bash
