@@ -110,14 +110,51 @@ jobs:
         # Создаем временный файл с JSON ключом
         echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
         
-        # Извлекаем private key и преобразуем \n в настоящие переносы строк
+        # Извлекаем данные из JSON ключа
+        SERVICE_ACCOUNT_ID=$(jq -r '.service_account_id' key.json)
         PRIVATE_KEY=$(jq -r '.private_key' key.json | sed 's/\\n/\n/g')
         
-        # Создаем docker-registry secret напрямую через kubectl
+        # Создаем JWT вручную (упрощенный вариант)
+        HEADER='{"alg":"PS256","typ":"JWT","kid":"'$(jq -r '.id' key.json)'"}'
+        NOW=$(date +%s)
+        EXPIRES=$(($NOW + 3600))
+        PAYLOAD='{"aud":"https://iam.api.cloud.yandex.net/iam/v1/tokens","iss":"'$SERVICE_ACCOUNT_ID'","iat":'$NOW',"exp":'$EXPIRES'}'
+        
+        JWT_HEADER_B64=$(echo -n "$HEADER" | base64 -w0 | tr '+/' '-_' | tr -d '=')
+        JWT_PAYLOAD_B64=$(echo -n "$PAYLOAD" | base64 -w0 | tr '+/' '-_' | tr -d '=')
+        
+        # Сохраняем private key в файл для подписи
+        echo "$PRIVATE_KEY" > private_key.pem
+        
+        # Создаем подпись (упрощенно, для тестирования)
+        SIGNATURE=$(echo -n "${JWT_HEADER_B64}.${JWT_PAYLOAD_B64}" | openssl dgst -binary -sha256 -sign private_key.pem | base64 -w0 | tr '+/' '-_' | tr -d '=')
+        
+        JWT_TOKEN="${JWT_HEADER_B64}.${JWT_PAYLOAD_B64}.${SIGNATURE}"
+        
+        # Получаем IAM токен
+        RESPONSE=$(curl -s -X POST \
+          -H "Content-Type: application/json" \
+          -d "{\"jwt\": \"$JWT_TOKEN\"}" \
+          "https://iam.api.cloud.yandex.net/iam/v1/tokens")
+        
+        IAM_TOKEN=$(echo "$RESPONSE" | jq -r '.iamToken')
+        
+        if [ -z "$IAM_TOKEN" ] || [ "$IAM_TOKEN" = "null" ]; then
+          echo "Error: Failed to get IAM token"
+          echo "Response: $RESPONSE"
+          echo "Trying alternative approach..."
+          
+          # Альтернативный подход - используем готовый action или другой метод
+          exit 1
+        fi
+        
+        echo "IAM token received successfully"
+        
+        # Создаем docker-registry secret с IAM токеном
         kubectl create secret docker-registry yc-registry-secret \
           --docker-server=cr.yandex \
-          --docker-username=json_key \
-          --docker-password="$PRIVATE_KEY" \
+          --docker-username=iam \
+          --docker-password="$IAM_TOKEN" \
           --namespace=diplom-nginx-namespace \
           --dry-run=client -o yaml | kubectl apply -f -
         
