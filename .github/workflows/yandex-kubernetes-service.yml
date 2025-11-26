@@ -48,28 +48,10 @@ jobs:
     - name: Setup Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Install dependencies
-      run: sudo apt-get update && sudo apt-get install -y jq openssl
-
-    - name: Login to Yandex Container Registry using YC CLI
-      run: |
-        # Создаем временный файл с JSON ключом
-        echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
-        
-        # Устанавливаем YC CLI
-        curl -s https://storage.yandex-cloud.net/yandexcloud-yc/install.sh | bash
-        source ~/.bashrc
-        
-        # Настраиваем профиль
-        yc config set service-account-key key.json
-        yc config set cloud-id ${{ secrets.YC_CLOUD_ID }}
-        yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
-        
-        # Настраиваем Docker аутентификацию
-        yc container registry configure-docker
-        
-        # Проверяем что логин прошел
-        docker login cr.yandex
+    - name: Login to Yandex Container Registry
+      uses: yc-actions/yc-cr-login@v2
+      with:
+        yc-sa-json-credentials: ${{ secrets.YC_SA_JSON_KEY }}
 
     - name: Extract tag name
       id: tag
