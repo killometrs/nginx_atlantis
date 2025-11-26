@@ -48,19 +48,36 @@ jobs:
     - name: Setup Docker Buildx
       uses: docker/setup-buildx-action@v3
 
+    - name: Install jq
+      run: sudo apt-get update && sudo apt-get install -y jq
+
+    - name: Debug JSON structure
+      run: |
+        echo "=== Debug: Checking JSON structure ==="
+        echo '${{ secrets.YC_SA_JSON_KEY }}' | jq . || echo "JSON is invalid"
+        echo "=== Debug: Raw content (first 100 chars) ==="
+        echo '${{ secrets.YC_SA_JSON_KEY }}' | head -c 100
+
     - name: Extract private key from JSON and login
       run: |
         # Сохраняем полный JSON во временный файл
-        echo '${{ secrets.YC_SA_JSON_KEY }}' > full_key.json
+        cat > full_key.json << 'EOF'
+        ${{ secrets.YC_SA_JSON_KEY }}
+        EOF
+        
+        # Проверяем что файл создан
+        echo "=== File content (first 200 chars) ==="
+        head -c 200 full_key.json
+        echo ""
         
         # Извлекаем только private_key поле
         PRIVATE_KEY=$(jq -r '.private_key' full_key.json)
+        echo "=== Private key (first 50 chars) ==="
+        echo "$PRIVATE_KEY" | head -c 50
+        echo ""
         
         # Логинимся используя только private key
         echo "$PRIVATE_KEY" | docker login --username json_key --password-stdin cr.yandex
-        
-        # Проверяем что логин прошел успешно
-        docker pull cr.yandex/${{ secrets.YC_REGISTRY_ID }}/diplom-nginx-app-nginx:latest || echo "Image may not exist yet"
 
     - name: Extract tag name
       id: tag
