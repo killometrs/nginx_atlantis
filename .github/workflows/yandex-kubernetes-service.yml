@@ -106,59 +106,67 @@ jobs:
           echo "Namespace diplom-nginx-namespace already exists"
         fi
 
-    - name: Create registry secret using container
+    - name: Create registry secret with IAM token
       run: |
-        # Используем готовый контейнер для получения IAM токена
-        docker run --rm \
-          -v $(pwd):/workspace \
-          -w /workspace \
-          python:3.9-alpine sh -c "
-          pip install pyjwt cryptography &&
-          cat > get_token.py << 'EOF'
-import json, time, jwt, requests
+        # Устанавливаем зависимости
+        sudo apt-get update && sudo apt-get install -y jq python3 python3-pip
+        
+        # Устанавливаем Python библиотеки для JWT
+        pip3 install pyjwt cryptography
+        
+        # Создаем Python скрипт для получения IAM токена
+        cat > get_iam_token.py << 'EOF'
+import json
+import time
+import jwt
 from cryptography.hazmat.primitives import serialization
+import requests
+import os
 
-key_data = json.loads('${{ secrets.YC_SA_JSON_KEY }}')
+# Получаем JSON ключ из environment variable
+key_json = os.environ['YC_SA_JSON_KEY']
+key_data = json.loads(key_json)
+
+private_key_pem = key_data['private_key'].replace('\\n', '\n')
 private_key = serialization.load_pem_private_key(
-    key_data['private_key'].replace('\\\\n', '\\n').encode(),
+    private_key_pem.encode(),
     password=None
 )
 
+# Создаем JWT
+now = int(time.time())
 payload = {
-    'aud': 'https://iam.api.cloud.yandex.net/iam/v1/tokens',
-    'iss': key_data['service_account_id'],
-    'iat': int(time.time()),
-    'exp': int(time.time()) + 3600
+    "aud": "https://iam.api.cloud.yandex.net/iam/v1/tokens",
+    "iss": key_data['service_account_id'],
+    "iat": now,
+    "exp": now + 3600
 }
 
 jwt_token = jwt.encode(
     payload,
     private_key,
-    algorithm='PS256',
-    headers={'kid': key_data['id'], 'typ': 'JWT', 'alg': 'PS256'}
+    algorithm="PS256",
+    headers={"kid": key_data['id'], "typ": "JWT", "alg": "PS256"}
 )
 
+# Получаем IAM токен
 response = requests.post(
-    'https://iam.api.cloud.yandex.net/iam/v1/tokens',
-    json={'jwt': jwt_token}
+    "https://iam.api.cloud.yandex.net/iam/v1/tokens",
+    json={"jwt": jwt_token}
 )
 
 if response.status_code == 200:
-    print(response.json()['iamToken'])
+    iam_token = response.json()['iamToken']
+    print(iam_token)
 else:
-    print('ERROR:' + response.text)
+    print(f"Error: {response.status_code} - {response.text}")
     exit(1)
 EOF
-          python get_token.py
-        " > iam_token.txt
+
+        # Запускаем Python скрипт с передачей секрета как environment variable
+        IAM_TOKEN=$(YC_SA_JSON_KEY='${{ secrets.YC_SA_JSON_KEY }}' python3 get_iam_token.py)
         
-        IAM_TOKEN=$(cat iam_token.txt)
-        
-        if [[ "$IAM_TOKEN" == ERROR:* ]]; then
-          echo "Failed to get IAM token: $IAM_TOKEN"
-          exit 1
-        fi
-        
+        # Создаем secret с IAM токеном
         kubectl create secret docker-registry yc-registry-pull-secret \
           --docker-server=cr.yandex \
           --docker-username=iam \
@@ -166,7 +174,7 @@ EOF
           --namespace=diplom-nginx-namespace \
           --dry-run=client -o yaml | kubectl apply -f -
         
-        echo "Registry secret created successfully"
+        echo "Registry secret created with IAM token: ${IAM_TOKEN:0:20}..."
 
     - name: Create nginx config for path routing
       run: |
