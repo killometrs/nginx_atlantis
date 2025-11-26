@@ -106,27 +106,20 @@ jobs:
           echo "Namespace diplom-nginx-namespace already exists"
         fi
 
-    - name: Create registry pull secret using existing service account
-      run: |
-        # Используем существующий сервисный аккаунт из secrets
-        echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
-        
-        # Создаем secret для доступа к registry
-        kubectl create secret docker-registry yc-registry-pull-secret \
-          --docker-server=cr.yandex \
-          --docker-username=json_key \
-          --docker-password="$(jq -r '.private_key' key.json | sed 's/\\n/\n/g')" \
-          --namespace=diplom-nginx-namespace \
-          --dry-run=client -o yaml | kubectl apply -f -
-
-
+    # УДАЛИТЕ старый шаг и используйте только этот:
     - name: Create registry pull secret with IAM token
       run: |
-        # Устанавливаем YC CLI через готовый action
-        - name: Setup YC CLI
-          uses: yc-actions/yc-setup@v2
-          with:
-            yc-sa-json-credentials: ${{ secrets.YC_SA_JSON_KEY }}
+        # Устанавливаем YC CLI
+        curl -s https://storage.yandex-cloud.net/yandexcloud-yc/install.sh | bash
+        source ~/.bashrc
+        
+        # Создаем временный файл с JSON ключом
+        echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
+        
+        # Настраиваем YC CLI
+        yc config set service-account-key key.json
+        yc config set cloud-id ${{ secrets.YC_CLOUD_ID }}
+        yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
         
         # Получаем IAM токен
         IAM_TOKEN=$(yc iam create-token)
@@ -238,6 +231,7 @@ jobs:
               - name: yc-registry-pull-secret
         EOF
         kubectl apply -f deployment.yaml
+
 
     - name: Create or update service
       run: |
