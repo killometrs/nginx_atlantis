@@ -48,25 +48,19 @@ jobs:
     - name: Setup Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Login to Yandex Container Registry using OAuth token
+    - name: Install jq
+      run: sudo apt-get update && sudo apt-get install -y jq curl
+
+    - name: Login to Yandex Container Registry using IAM token
       run: |
-        # Создаем временный файл с JSON ключом
-        echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
+        # Получаем IAM токен используя JSON ключ
+        IAM_TOKEN=$(curl -s -H "Content-Type: application/json" \
+          -d @<(echo '${{ secrets.YC_SA_JSON_KEY }}') \
+          "https://iam.api.cloud.yandex.net/iam/v1/tokens" | \
+          jq -r '.iamToken')
         
-        # Устанавливаем YC CLI
-        curl -s https://storage.yandex-cloud.net/yandexcloud-yc/install.sh | bash > /dev/null 2>&1
-        source ~/.bashrc
-        
-        # Настраиваем профиль
-        yc config set service-account-key key.json
-        yc config set cloud-id ${{ secrets.YC_CLOUD_ID }}
-        yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
-        
-        # Настраиваем Docker аутентификацию
-        yc container registry configure-docker --force
-        
-        # Проверяем что логин прошел
-        docker login cr.yandex
+        # Логинимся в registry используя IAM токен
+        echo "$IAM_TOKEN" | docker login --username iam --password-stdin cr.yandex
 
     - name: Extract tag name
       id: tag
