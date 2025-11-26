@@ -116,52 +116,52 @@ jobs:
         
         # Создаем Python скрипт для получения IAM токена
         cat > get_iam_token.py << 'EOF'
-import json
-import time
-import jwt
-from cryptography.hazmat.primitives import serialization
-import requests
-import os
-
-# Получаем JSON ключ из environment variable
-key_json = os.environ['YC_SA_JSON_KEY']
-key_data = json.loads(key_json)
-
-private_key_pem = key_data['private_key'].replace('\\n', '\n')
-private_key = serialization.load_pem_private_key(
-    private_key_pem.encode(),
-    password=None
-)
-
-# Создаем JWT
-now = int(time.time())
-payload = {
-    "aud": "https://iam.api.cloud.yandex.net/iam/v1/tokens",
-    "iss": key_data['service_account_id'],
-    "iat": now,
-    "exp": now + 3600
-}
-
-jwt_token = jwt.encode(
-    payload,
-    private_key,
-    algorithm="PS256",
-    headers={"kid": key_data['id'], "typ": "JWT", "alg": "PS256"}
-)
-
-# Получаем IAM токен
-response = requests.post(
-    "https://iam.api.cloud.yandex.net/iam/v1/tokens",
-    json={"jwt": jwt_token}
-)
-
-if response.status_code == 200:
-    iam_token = response.json()['iamToken']
-    print(iam_token)
-else:
-    print(f"Error: {response.status_code} - {response.text}")
-    exit(1)
-EOF
+        import json
+        import time
+        import jwt
+        from cryptography.hazmat.primitives import serialization
+        import requests
+        import os
+        
+        # Получаем JSON ключ из environment variable
+        key_json = os.environ['YC_SA_JSON_KEY']
+        key_data = json.loads(key_json)
+        
+        private_key_pem = key_data['private_key'].replace('\\n', '\n')
+        private_key = serialization.load_pem_private_key(
+            private_key_pem.encode(),
+            password=None
+        )
+        
+        # Создаем JWT
+        now = int(time.time())
+        payload = {
+            "aud": "https://iam.api.cloud.yandex.net/iam/v1/tokens",
+            "iss": key_data['service_account_id'],
+            "iat": now,
+            "exp": now + 3600
+        }
+        
+        jwt_token = jwt.encode(
+            payload,
+            private_key,
+            algorithm="PS256",
+            headers={"kid": key_data['id'], "typ": "JWT", "alg": "PS256"}
+        )
+        
+        # Получаем IAM токен
+        response = requests.post(
+            "https://iam.api.cloud.yandex.net/iam/v1/tokens",
+            json={"jwt": jwt_token}
+        )
+        
+        if response.status_code == 200:
+            iam_token = response.json()['iamToken']
+            print(iam_token)
+        else:
+            print(f"Error: {response.status_code} - {response.text}")
+            exit(1)
+        EOF
 
         # Запускаем Python скрипт с передачей секрета как environment variable
         IAM_TOKEN=$(YC_SA_JSON_KEY='${{ secrets.YC_SA_JSON_KEY }}' python3 get_iam_token.py)
