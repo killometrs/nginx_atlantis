@@ -27,7 +27,7 @@ jobs:
 
     - name: Validate HTML files
       run: |
-        cat > .htmlvalidate.json << EOF
+        cat > .htmlvalidate.json << 'EOF'
         {
           "rules": {
             "element-required-attributes": "off"
@@ -49,94 +49,27 @@ jobs:
       uses: docker/setup-buildx-action@v3
 
     - name: Install dependencies
-      run: sudo apt-get update && sudo apt-get install -y jq openssl python3 python3-pip
+      run: sudo apt-get update && sudo apt-get install -y jq openssl
 
-    - name: Install python cryptography library for PS256
-      run: pip3 install pyjwt cryptography
-
-    - name: Create Python script for JWT generation
-      run: |
-        cat > generate_jwt.py << 'PYTHON_EOF'
-import json
-import time
-import jwt
-from cryptography.hazmat.primitives import serialization
-
-# Читаем ключ
-with open('private_key.pem', 'r') as f:
-    private_key_pem = f.read()
-
-private_key = serialization.load_pem_private_key(
-    private_key_pem.encode(),
-    password=None
-)
-
-# Подготавливаем claims
-now = int(time.time())
-expires = now + 3600
-
-payload = {
-    'aud': 'https://iam.api.cloud.yandex.net/iam/v1/tokens',
-    'iss': '$SERVICE_ACCOUNT_ID',
-    'iat': now,
-    'exp': expires
-}
-
-# Создаем JWT с PS256 алгоритмом
-jwt_token = jwt.encode(
-    payload,
-    private_key,
-    algorithm='PS256',
-    headers={'kid': '$KEY_ID', 'typ': 'JWT', 'alg': 'PS256'}
-)
-
-print(jwt_token)
-PYTHON_EOF
-
-    - name: Login to Yandex Container Registry with JWT
+    - name: Login to Yandex Container Registry using YC CLI
       run: |
         # Создаем временный файл с JSON ключом
         echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
         
-        # Извлекаем данные из key.json
-        SERVICE_ACCOUNT_ID=$(jq -r '.service_account_id' key.json)
-        KEY_ID=$(jq -r '.id' key.json)
-        PRIVATE_KEY_PEM=$(jq -r '.private_key' key.json | sed 's/\\n/\n/g')
+        # Устанавливаем YC CLI
+        curl -s https://storage.yandex-cloud.net/yandexcloud-yc/install.sh | bash
+        source ~/.bashrc
         
-        echo "Service Account ID: $SERVICE_ACCOUNT_ID"
-        echo "Key ID: $KEY_ID"
+        # Настраиваем профиль
+        yc config set service-account-key key.json
+        yc config set cloud-id ${{ secrets.YC_CLOUD_ID }}
+        yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
         
-        # Сохраняем private key в файл
-        echo "$PRIVATE_KEY_PEM" > private_key.pem
+        # Настраиваем Docker аутентификацию
+        yc container registry configure-docker
         
-        # Заменяем переменные в Python скрипте
-        sed -i "s/\$SERVICE_ACCOUNT_ID/$SERVICE_ACCOUNT_ID/g" generate_jwt.py
-        sed -i "s/\$KEY_ID/$KEY_ID/g" generate_jwt.py
-        
-        # Используем Python для создания JWT с PS256 подписью
-        python3 generate_jwt.py > jwt_token.txt
-
-        JWT_TOKEN=$(cat jwt_token.txt)
-        echo "JWT Token created successfully"
-        
-        # Обмен JWT на IAM-токен
-        RESPONSE=$(curl -s -X POST \
-          -H "Content-Type: application/json" \
-          --data '{"jwt":"'"$JWT_TOKEN"'"}' \
-          "https://iam.api.cloud.yandex.net/iam/v1/tokens")
-        
-        # Получаем IAM токен
-        IAM_TOKEN=$(echo "$RESPONSE" | jq -r '.iamToken')
-        
-        if [ "$IAM_TOKEN" != "null" ] && [ -n "$IAM_TOKEN" ]; then
-          echo "IAM token successfully received"
-          # Логинимся в registry используя IAM токен
-          echo "$IAM_TOKEN" | docker login --username iam --password-stdin cr.yandex
-        else
-          echo "Error getting IAM token:"
-          echo "$RESPONSE"
-          exit 1
-        fi
+        # Проверяем что логин прошел
+        docker login cr.yandex
 
     - name: Extract tag name
       id: tag
@@ -193,7 +126,7 @@ PYTHON_EOF
 
     - name: Create nginx config for path routing
       run: |
-        cat > nginx-config.yaml << EOF
+        cat > nginx-config.yaml << 'EOF'
         apiVersion: v1
         kind: ConfigMap
         metadata:
@@ -216,12 +149,12 @@ PYTHON_EOF
                     location /nginx {
                         alias /usr/share/nginx/html;
                         index index.html;
-                        try_files \$uri \$uri/ /nginx/index.html;
+                        try_files $uri $uri/ /nginx/index.html;
                     }
                     
                     location /nginx/ {
                         alias /usr/share/nginx/html/;
-                        try_files \$uri \$uri/ =404;
+                        try_files $uri $uri/ =404;
                     }
                     
                     location = / {
@@ -234,7 +167,7 @@ PYTHON_EOF
 
     - name: Create or update deployment
       run: |
-        cat > deployment.yaml << EOF
+        cat > deployment.yaml << 'EOF'
         apiVersion: apps/v1
         kind: Deployment
         metadata:
@@ -289,7 +222,7 @@ PYTHON_EOF
 
     - name: Create or update service
       run: |
-        cat > service.yaml << EOF
+        cat > service.yaml << 'EOF'
         apiVersion: v1
         kind: Service
         metadata:
@@ -307,7 +240,7 @@ PYTHON_EOF
 
     - name: Create ingress for nginx path
       run: |
-        cat > ingress.yaml << EOF
+        cat > ingress.yaml << 'EOF'
         apiVersion: networking.k8s.io/v1
         kind: Ingress
         metadata:
