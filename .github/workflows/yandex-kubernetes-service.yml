@@ -108,70 +108,58 @@ jobs:
 
     - name: Setup registry access via permanent DaemonSet
       run: |
-        # Создаем постоянный DaemonSet для настройки Docker auth на всех нодах
-        cat > registry-setup-daemonset.yaml << 'EOF'
+        # Вычисляем auth data заранее
+        echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
+        PRIVATE_KEY=$(jq -r '.private_key' key.json | sed 's/\\n/\\n/g')
+        AUTH_DATA=$(echo -n "json_key:$PRIVATE_KEY" | base64 -w0)
+        
+        # Создаем DaemonSet используя kubectl apply с прямым YAML
+        cat <<EOF | kubectl apply -f -
         apiVersion: apps/v1
         kind: DaemonSet
         metadata:
           name: yc-registry-setup
           namespace: kube-system
-          labels:
-            app: yc-registry-setup
         spec:
           selector:
             matchLabels:
-              app: yc-registry-setup
+              name: yc-registry-setup
           template:
             metadata:
               labels:
-                app: yc-registry-setup
+                name: yc-registry-setup
             spec:
               hostPID: true
               hostNetwork: true
               containers:
-              - name: registry-setup
-                image: docker:latest
-                command:
+              - name: setup
+                image: alpine
+                command: 
                 - /bin/sh
                 - -c
                 - |
+                  apk add --no-cache docker
                   mkdir -p /root/.docker
-                  PRIVATE_KEY='$(echo '${{ secrets.YC_SA_JSON_KEY }}' | jq -r '.private_key' | sed 's/\\n/\\n/g')'
-                  AUTH=$(echo -n "json_key:$PRIVATE_KEY" | base64 -w0)
-                  cat > /root/.docker/config.json << DOCKER_CONFIG
-                  {
-                    "auths": {
-                      "cr.yandex": {
-                        "auth": "$AUTH"
-                      }
-                    }
-                  }
-                  DOCKER_CONFIG
-                  echo "Docker config for Yandex Registry configured on node $(hostname)"
-                  while true; do
-                    sleep 3600
-                  done
+                  echo '{"auths":{"cr.yandex":{"auth":"$AUTH_DATA"}}}' > /root/.docker/config.json
+                  echo "Docker config for Yandex Registry configured on \$(hostname)"
+                  sleep infinity
                 securityContext:
                   privileged: true
                 volumeMounts:
-                - name: root-docker
+                - name: docker-dir
                   mountPath: /root/.docker
               volumes:
-              - name: root-docker
+              - name: docker-dir
                 hostPath:
                   path: /root/.docker
                   type: DirectoryOrCreate
           tolerations:
           - operator: Exists
         EOF
-        
-        # Применяем DaemonSet
-        kubectl apply -f registry-setup-daemonset.yaml
-        
-        # Ждем пока pods запустятся
+
         echo "Waiting for registry setup pods to start..."
         sleep 30
-        kubectl get pods -n kube-system -l app=yc-registry-setup
+        kubectl get pods -n kube-system -l name=yc-registry-setup
 
     - name: Create nginx config for path routing
       run: |
