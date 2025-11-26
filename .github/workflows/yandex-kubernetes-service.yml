@@ -21,15 +21,15 @@ jobs:
     - name: Test Docker build
       run: docker build -t test-diplom-nginx-image .
 
+    - name: Install HTML validator
+      run: |
+        # Устанавливаем валидатор через npm
+        npm install -g html-validate
+
     - name: Validate HTML files
       run: |
-        find ./html -name "*.html" -type f | while read file; do
-          echo "Validating $file"
-          if ! docker run --rm -v "$(pwd):/workspace" ghcr.io/validator/validator:latest "/workspace/$file" | grep -q "The document validates"; then
-            echo "HTML validation failed for $file"
-            exit 1
-          fi
-        done
+        # Проверяем все HTML файлы с помощью html-validate
+        html-validate ./html/**/*.html
 
   build-and-push:
     needs: test
