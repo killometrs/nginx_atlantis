@@ -119,6 +119,28 @@ jobs:
           --namespace=diplom-nginx-namespace \
           --dry-run=client -o yaml | kubectl apply -f -
 
+
+    - name: Create registry pull secret with IAM token
+      run: |
+        # Устанавливаем YC CLI через готовый action
+        - name: Setup YC CLI
+          uses: yc-actions/yc-setup@v2
+          with:
+            yc-sa-json-credentials: ${{ secrets.YC_SA_JSON_KEY }}
+        
+        # Получаем IAM токен
+        IAM_TOKEN=$(yc iam create-token)
+        
+        # Создаем secret с IAM токеном
+        kubectl create secret docker-registry yc-registry-pull-secret \
+          --docker-server=cr.yandex \
+          --docker-username=iam \
+          --docker-password="$IAM_TOKEN" \
+          --namespace=diplom-nginx-namespace \
+          --dry-run=client -o yaml | kubectl apply -f -
+        
+        echo "Registry secret created with IAM token"
+
     - name: Create nginx config for path routing
       run: |
         cat > nginx-config.yaml << 'EOF'
