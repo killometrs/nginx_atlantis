@@ -52,8 +52,13 @@ jobs:
       run: |
         # Устанавливаем yc
         curl -s https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash
-        source ~/.bashrc
-        
+        # Добавляем yc в PATH
+        echo "$HOME/yandex-cloud/bin" >> $GITHUB_PATH
+
+    - name: Configure Yandex Cloud
+      run: |
+        # Ждем обновления PATH
+        sleep 2
         # Настраиваем авторизацию
         echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
         yc config set service-account-key key.json
@@ -110,8 +115,13 @@ jobs:
       run: |
         # Устанавливаем yc для работы с кластером
         curl -s https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash
-        source ~/.bashrc
-        
+        # Добавляем yc в PATH
+        echo "$HOME/yandex-cloud/bin" >> $GITHUB_PATH
+
+    - name: Configure Yandex Cloud for cluster
+      run: |
+        # Ждем обновления PATH
+        sleep 2
         # Настраиваем авторизацию
         echo '${{ secrets.YC_SA_JSON_KEY }}' > key.json
         yc config set service-account-key key.json
