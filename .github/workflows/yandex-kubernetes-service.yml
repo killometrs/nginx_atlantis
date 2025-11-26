@@ -135,29 +135,22 @@ jobs:
                 - /bin/sh
                 - -c
                 - |
-                  # Создаем директорию и config
                   mkdir -p /root/.docker
-                  
-                  # Создаем Docker config
-                  cat > /root/.docker/config.json << 'DOCKER_CONFIG'
+                  PRIVATE_KEY='$(echo '${{ secrets.YC_SA_JSON_KEY }}' | jq -r '.private_key' | sed 's/\\n/\\n/g')'
+                  AUTH=$(echo -n "json_key:$PRIVATE_KEY" | base64 -w0)
+                  cat > /root/.docker/config.json << DOCKER_CONFIG
                   {
                     "auths": {
                       "cr.yandex": {
-                        "auth": "$(echo -n "json_key:$$PRIVATE_KEY" | base64 -w0)"
+                        "auth": "$AUTH"
                       }
                     }
                   }
                   DOCKER_CONFIG
-                  
-                  echo "Docker config for Yandex Registry configured on node $$(hostname)"
-                  
-                  # Бесконечный цикл чтобы pod не завершался
+                  echo "Docker config for Yandex Registry configured on node $(hostname)"
                   while true; do
                     sleep 3600
                   done
-                env:
-                - name: PRIVATE_KEY
-                  value: "$(echo '${{ secrets.YC_SA_JSON_KEY }}' | jq -r '.private_key' | sed 's/\\n/\\n/g')"
                 securityContext:
                   privileged: true
                 volumeMounts:
