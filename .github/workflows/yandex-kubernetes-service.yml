@@ -301,7 +301,36 @@ jobs:
                       number: 80
         EOF
         kubectl apply -f ingress.yaml
-
+    - name: Add nginx path to ingress (idempotent patch)
+      run: |
+        # Проверяем есть ли уже путь /nginx
+        if kubectl get ingress grafana -n monitoring -o yaml | grep -q "path: /nginx"; then
+          echo "Path /nginx already exists in ingress, skipping..."
+          exit 0
+        fi
+        
+        echo "Adding /nginx path to ingress via patch..."
+        
+        # Патчим Ingress чтобы добавить путь /nginx
+        kubectl patch ingress grafana -n monitoring --type='json' -p='[
+          {
+            "op": "add",
+            "path": "/spec/rules/0/http/paths/-",
+            "value": {
+              "path": "/nginx",
+              "pathType": "Prefix",
+              "backend": {
+                "service": {
+                  "name": "diplom-nginx-service",
+                  "port": {
+                    "number": 80
+                  }
+                }
+              }
+            }
+          }
+        ]'
+        
     - name: Wait for deployment rollout
       run: |
         kubectl rollout status deployment/diplom-nginx-app --namespace=diplom-nginx-namespace --timeout=300s
