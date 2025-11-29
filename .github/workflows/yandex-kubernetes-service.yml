@@ -311,7 +311,7 @@ jobs:
         
         echo "Adding /nginx path to ingress via patch..."
         
-        # Патчим Ingress чтобы добавить путь /nginx
+        # Патчим Ingress чтобы добавить путь /nginx с правильным namespace
         kubectl patch ingress grafana -n monitoring --type='json' -p='[
           {
             "op": "add",
@@ -328,6 +328,15 @@ jobs:
                 }
               }
             }
+          }
+        ]'
+        
+        # Явно указываем namespace для сервиса
+        kubectl patch ingress grafana -n monitoring --type='json' -p='[
+          {
+            "op": "replace",
+            "path": "/spec/rules/0/http/paths/1/backend/service/namespace",
+            "value": "diplom-nginx-namespace"
           }
         ]'
         
