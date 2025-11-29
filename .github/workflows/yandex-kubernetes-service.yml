@@ -170,40 +170,9 @@ jobs:
         # Удаляем ExternalName service
         kubectl delete svc nginx-external -n monitoring --ignore-not-found=true
         
-        # Удаляем путь /nginx из grafana ingress
-        kubectl patch ingress grafana -n monitoring --type='json' -p='[
-          {"op": "remove", "path": "/spec/rules/0/http/paths/1"}
-        ]' || echo "No path to remove"
-        
         echo "=== Cleanup completed ==="
-    - name: Create clean ingress in nginx namespace
-      run: |
-        # Создаем чистый Ingress без rewrite-target
-        cat > /tmp/nginx-ingress.yaml << 'EOF'
-        apiVersion: networking.k8s.io/v1
-        kind: Ingress
-        metadata:
-          name: nginx-app
-          namespace: diplom-nginx-namespace
-        spec:
-          ingressClassName: nginx
-          rules:
-          - http:
-              paths:
-              - path: /nginx
-                pathType: Prefix
-                backend:
-                  service:
-                    name: diplom-nginx-service
-                    port:
-                      number: 80
-        EOF
-        kubectl apply -f /tmp/nginx-ingress.yaml
-        
-        echo "=== Clean Nginx Ingress created ==="
-        kubectl get ingress -A
-        
-    - name: Create nginx config for path routing
+
+    - name: Create nginx config (simplified)
       run: |
         cat > nginx-config.yaml << 'EOF'
         apiVersion: v1
@@ -216,28 +185,16 @@ jobs:
             events {
                 worker_connections 1024;
             }
-
             http {
                 include /etc/nginx/mime.types;
                 default_type application/octet-stream;
-
                 server {
                     listen 80;
                     server_name _;
-
-                    location /nginx {
-                        alias /usr/share/nginx/html;
+                    location / {
+                        root /usr/share/nginx/html;
                         index index.html;
-                        try_files $uri $uri/ /nginx/index.html;
-                    }
-
-                    location /nginx/ {
-                        alias /usr/share/nginx/html/;
-                        try_files $uri $uri/ =404;
-                    }
-
-                    location = / {
-                        return 302 /nginx;
+                        try_files $uri $uri/ /index.html;
                     }
                 }
             }
@@ -282,13 +239,13 @@ jobs:
                   subPath: nginx.conf
                 livenessProbe:
                   httpGet:
-                    path: /nginx
+                    path: /
                     port: 80
                   initialDelaySeconds: 10
                   periodSeconds: 10
                 readinessProbe:
                   httpGet:
-                    path: /nginx
+                    path: /
                     port: 80
                   initialDelaySeconds: 5
                   periodSeconds: 5
@@ -319,27 +276,20 @@ jobs:
         EOF
         kubectl apply -f service.yaml
 
-        # Явно указываем namespace для сервиса
-        kubectl patch ingress grafana -n monitoring --type='json' -p='[
-          {
-            "op": "replace",
-            "path": "/spec/rules/0/http/paths/1/backend/service/namespace",
-            "value": "diplom-nginx-namespace"
-          }
-        ]'
-
-    - name: Create separate ingress in nginx namespace
+    - name: Wait for deployment to be ready
       run: |
-        # Создаем отдельный Ingress в diplom-nginx-namespace
+        kubectl rollout status deployment/diplom-nginx-app --namespace=diplom-nginx-namespace --timeout=300s
+        echo "=== Deployment ready ==="
+
+    - name: Create simple ingress in nginx namespace
+      run: |
+        # Создаем простой Ingress
         cat > /tmp/nginx-ingress.yaml << 'EOF'
         apiVersion: networking.k8s.io/v1
         kind: Ingress
         metadata:
           name: nginx-app
           namespace: diplom-nginx-namespace
-          annotations:
-            nginx.ingress.kubernetes.io/rewrite-target: /
-            nginx.ingress.kubernetes.io/ssl-redirect: "false"
         spec:
           ingressClassName: nginx
           rules:
@@ -356,24 +306,14 @@ jobs:
         kubectl apply -f /tmp/nginx-ingress.yaml
         
         echo "=== Nginx Ingress created ==="
-        
-    - name: Wait for deployment rollout
-      run: |
-        kubectl rollout status deployment/diplom-nginx-app --namespace=diplom-nginx-namespace --timeout=300s
+        kubectl get ingress -A
 
-    - name: Verify deployment
+    - name: Verify everything works
       run: |
-        echo "=== Deployment status ==="
-        kubectl get deployments -n diplom-nginx-namespace
-        echo "=== Pods status ==="
-        kubectl get pods -n diplom-nginx-namespace
-        echo "=== Service status ==="
-        kubectl get services -n diplom-nginx-namespace
-        echo "=== Ingress status ==="
-        kubectl get ingress -n diplom-nginx-namespace
-        echo "=== Registry secret ==="
-        kubectl get secret yc-registry-pull-secret -n diplom-nginx-namespace
-        echo "=== Service account ==="
-        kubectl get serviceaccount default -n diplom-nginx-namespace -o yaml | grep -A5 imagePullSecrets
-        echo "=== Current image version ==="
-        kubectl describe deployment diplom-nginx-app -n diplom-nginx-namespace | grep Image:
+        echo "=== Final verification ==="
+        kubectl get deployments,pods,svc,ingress -n diplom-nginx-namespace
+        echo "=== Endpoints check ==="
+        kubectl get endpoints diplom-nginx-service -n diplom-nginx-namespace
+        echo "=== Pod IP ==="
+        kubectl get pod -n diplom-nginx-namespace -l app=diplom-nginx-app -o jsonpath='{.items[0].status.podIP}'
+        echo ""
