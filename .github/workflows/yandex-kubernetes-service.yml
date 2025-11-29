@@ -400,6 +400,35 @@ jobs:
             "value": "diplom-nginx-namespace"
           }
         ]'
+
+    - name: Create separate ingress in nginx namespace
+      run: |
+        # Создаем отдельный Ingress в diplom-nginx-namespace
+        cat > /tmp/nginx-ingress.yaml << 'EOF'
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: nginx-app
+          namespace: diplom-nginx-namespace
+          annotations:
+            nginx.ingress.kubernetes.io/rewrite-target: /
+            nginx.ingress.kubernetes.io/ssl-redirect: "false"
+        spec:
+          ingressClassName: nginx
+          rules:
+          - http:
+              paths:
+              - path: /nginx
+                pathType: Prefix
+                backend:
+                  service:
+                    name: diplom-nginx-service
+                    port:
+                      number: 80
+        EOF
+        kubectl apply -f /tmp/nginx-ingress.yaml
+        
+        echo "=== Nginx Ingress created ==="
         
     - name: Wait for deployment rollout
       run: |
