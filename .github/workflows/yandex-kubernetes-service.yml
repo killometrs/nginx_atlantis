@@ -175,12 +175,34 @@ jobs:
           {"op": "remove", "path": "/spec/rules/0/http/paths/1"}
         ]' || echo "No path to remove"
         
-        # Перезапускаем Ingress Controller чтобы очистить кэш
-        kubectl rollout restart deployment/ingress-nginx-controller -n ingress-nginx
-        kubectl rollout status deployment/ingress-nginx-controller -n ingress-nginx --timeout=60s
-        
         echo "=== Cleanup completed ==="
-
+    - name: Create clean ingress in nginx namespace
+      run: |
+        # Создаем чистый Ingress без rewrite-target
+        cat > /tmp/nginx-ingress.yaml << 'EOF'
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: nginx-app
+          namespace: diplom-nginx-namespace
+        spec:
+          ingressClassName: nginx
+          rules:
+          - http:
+              paths:
+              - path: /nginx
+                pathType: Prefix
+                backend:
+                  service:
+                    name: diplom-nginx-service
+                    port:
+                      number: 80
+        EOF
+        kubectl apply -f /tmp/nginx-ingress.yaml
+        
+        echo "=== Clean Nginx Ingress created ==="
+        kubectl get ingress -A
+        
     - name: Create nginx config for path routing
       run: |
         cat > nginx-config.yaml << 'EOF'
