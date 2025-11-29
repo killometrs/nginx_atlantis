@@ -161,6 +161,26 @@ jobs:
 
         echo "Registry secret created using IAM token"
 
+    - name: Clean up old nginx resources
+      run: |
+        # Удаляем все старые Ingress
+        kubectl delete ingress nginx-ingress -n diplom-nginx-namespace --ignore-not-found=true
+        kubectl delete ingress nginx-app -n diplom-nginx-namespace --ignore-not-found=true
+        
+        # Удаляем ExternalName service
+        kubectl delete svc nginx-external -n monitoring --ignore-not-found=true
+        
+        # Удаляем путь /nginx из grafana ingress
+        kubectl patch ingress grafana -n monitoring --type='json' -p='[
+          {"op": "remove", "path": "/spec/rules/0/http/paths/1"}
+        ]' || echo "No path to remove"
+        
+        # Перезапускаем Ingress Controller чтобы очистить кэш
+        kubectl rollout restart deployment/ingress-nginx-controller -n ingress-nginx
+        kubectl rollout status deployment/ingress-nginx-controller -n ingress-nginx --timeout=60s
+        
+        echo "=== Cleanup completed ==="
+
     - name: Create nginx config for path routing
       run: |
         cat > nginx-config.yaml << 'EOF'
